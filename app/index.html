@@ -1,0 +1,135 @@
+<html>
+  <head>
+    <meta charset="utf-8">
+    <meta http-equiv="X-UA-Compatible" content="IE=edge">
+    <title>Ahoy! Conference vanilla JS demo client</title>
+    <meta name="description" content="">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+  </head>
+  <body>
+    local video:
+    <video src="" id="localVideo" height="160" muted="true" autoplay="true"></video>
+    <hr size="1">
+    <div id="videoDiv">
+      remote videos:
+    </div>
+    <script src="js/app.js"></script>
+    <script src="config.js"></script>
+    <script language="JavaScript">
+      var videoDiv= document.getElementById("videoDiv");
+      var members = {};
+
+      function createElement(htmlStr) {
+        var frag = document.createDocumentFragment(),
+        temp = document.createElement('div');
+        temp.innerHTML = htmlStr;
+        while (temp.firstChild) {
+          frag.appendChild(temp.firstChild);
+        }
+        return frag;
+      }
+
+      var delegate = {
+        didJoinConference: function(error, conference) {
+          if (error) {
+            console.log('error joining conference ' + conference.conferenceID);
+            console.log(error);
+          } else {
+            console.log('joined conference ' + conference.conferenceName);
+            // request user media
+            if (conference.isSpeaker) {
+              getUserMedia(
+                { audio: true, video: true },
+                function getUserMediaSuccess(stream) {
+                  conference.localStream = stream;
+                  var video = document.getElementById('localVideo');
+                  if (video) {
+                    attachMediaStream(video, stream);
+                  }
+                  conference.publishMedia(
+                    true,
+                    true,
+                    500,
+                    function(error) {
+                      if (error) {
+                        console.log(error);
+                      }
+                    }
+                  );
+                },
+                function getUserMediaError(error) {
+                  console.log(error);
+                }
+              );
+            }
+          }
+        },
+
+        didLeaveConference: function(conference, didGetKicked) {
+          console.log('didLeaveConference ' + conference.conferenceName);
+          var video = document.getElementById('localVideo');
+          video.src = "";
+          if (conference.localStream) {
+            conference.localStream.stop();
+            conference.localStream = null;
+          }
+        },
+
+        memberDidJoinConference: function(conference, member) {
+          members[member.memberID] = member;
+          console.log('member ' + member.name + ' did join conference ' + conference.conferenceName);
+        },
+
+        memberDidLeaveConference: function(conference, member) {
+          console.log('member ' + member.name + ' did leave conference ' + conference.conferenceName);
+          delete members[member.memberID];
+        },
+
+        memberDidStartSharingMedia: function(conference, member) {
+          console.log('member ' + member.name + ' did start sharing media');
+
+          member.requestMedia(true, true, function(error, stream) {
+            if (error) {
+              console.log('error requesting media for member: ' + member.memberID);
+            } else {
+              var html_str = '<video height="160" id="video-'+member.memberID+'" autoplay="true" />';
+              videoDiv.appendChild(createElement(html_str));
+              var video = document.getElementById('video-' + member.memberID);
+              if (video) {
+                attachMediaStream(video, stream);
+              }
+              console.log('got media for member: ' + member.memberID);
+              console.log(stream);
+            }
+          });
+        },
+
+        memberDidStopSharingMedia: function(conference, member) {
+          console.log('member ' + member.name + ' did stop sharing media');
+          var video = document.getElementById('video-' + member.memberID);
+          if (video) {
+            video.src = "";
+            videoDiv.removeChild(video);
+          }
+
+        },
+        mediaEvent: function(conference, member, event) {
+
+        }
+      };
+
+      if (document.location.href.indexOf("ttp://") > 0) {
+        var wsUrl = "ws://"+document.location.href.substring(7, document.location.href.indexOf("/", 7));
+      } else if (document.location.href.indexOf("ttps://") > 0) {
+        var wsUrl = "wss://"+document.location.href.substring(8, document.location.href.indexOf("/", 8));
+      }
+      if (AHOY_CONFIG && AHOY_CONFIG.wsUrl) {
+        wsUrl = AHOY_CONFIG.wsUrl;
+      }
+
+      var conference = new AhoyConference(wsUrl, "my conference ID", "my name", "", delegate);
+      conference.join();
+
+    </script>
+  </body>
+</html>
