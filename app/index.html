@@ -8,7 +8,7 @@
   </head>
   <body>
     local video:
-    <video src="" id="localVideo" height="160" muted="true" autoplay="true"></video>
+    <video src="" id="localVideo" height="160" muted autoplay></video>
     <hr size="1">
     <div id="videoDiv">
       remote videos:
@@ -92,7 +92,7 @@
             if (error) {
               console.log('error requesting media for member: ' + member.memberID);
             } else {
-              var html_str = '<video height="160" id="video-'+member.memberID+'" autoplay="true" />';
+              var html_str = '<video height="160" id="video-'+member.memberID+'" autoplay />';
               videoDiv.appendChild(createElement(html_str));
               var video = document.getElementById('video-' + member.memberID);
               if (video) {

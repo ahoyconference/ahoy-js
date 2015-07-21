@@ -8,7 +8,6 @@ function AhoyConferenceMember(conference, member) {
     this.isAudioAvailable = member.audio.available;
     this.isVideoAvailable = member.video.available;
     this.pc = null;
-    this.stream = null;
   } catch (error) {
     console.log(error);
   }
@@ -52,7 +51,7 @@ AhoyConferenceMember.prototype.createSdpResponse = function(sessionOffer, callba
 
   var remoteDescription = new RTCSessionDescription( { type: "offer", sdp: unescape(sessionOffer.sdp) } );
   self.pc.onaddstream = function(event) {
-    self.stream = event.stream;
+    callback(null, event.stream);
   };
   self.pc.setRemoteDescription(
     remoteDescription,
@@ -69,7 +68,6 @@ AhoyConferenceMember.prototype.createSdpResponse = function(sessionOffer, callba
           self.pc.setLocalDescription(
             description,
             function setLocalSuccess() {
-              callback(null, self.stream);
             },
             function setLocalError(error) {
               console.log(error);
