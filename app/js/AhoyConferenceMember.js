@@ -37,6 +37,21 @@ AhoyConferenceMember.prototype.requestMedia = function(audio, video, callback) {
   }
 }
 
+AhoyConferenceMember.prototype.kick = function(callback) {
+  var self = this;
+  var conference = self.conference;
+  var transactionID = 'kick-' + Math.random();
+  console.log('kicking member: ' + self.name);
+  conference.transactionCallbacks[transactionID] = callback;
+  conference.sendMessage(
+    {
+      messageType: "CONFERENCE_KICK_request",
+      memberID: self.memberID,
+      transactionID: transactionID
+    }
+  );
+}
+
 
 AhoyConferenceMember.prototype.createSdpResponse = function(sessionOffer, callback) {
   var self = this;

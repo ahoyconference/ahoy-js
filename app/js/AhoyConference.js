@@ -1,6 +1,8 @@
 function AhoyConference(delegate, options) {
   this.delegate = delegate;
   this.ws = null;
+  this.wsUrl = null;
+  this.createConferenceOptions = null;
   this.conferenceName = null;
   this.description = null;
   this.isSpeaker = false;
@@ -52,6 +54,29 @@ AhoyConference.prototype.sendMessage = function(msg) {
   }
   if (self.ws) {
     self.ws.send(JSON.stringify(msg));
+  }
+}
+
+AhoyConference.prototype.handleConferenceCreateResponse = function(msg) {
+  var self = this;
+
+  var callback = self.transactionCallbacks[msg.transactionID];
+  if (!callback) {
+    console.log('CONFERENCE_CREATE_request for unknown transactionID: ' + msg.transactionID);
+    return;
+  }
+  delete self.transactionCallbacks[msg.transactionID];
+
+  switch (msg.status) {
+    case 200:
+      self.conferenceID = msg.conferenceID;
+    case 486:
+      callback(null, self);
+      break;
+
+    default:
+    console.log(msg);
+    callback({ errorCode: msg.status, errorText: msg.reason});
   }
 }
 
@@ -161,7 +186,9 @@ AhoyConference.prototype.handleMediaEvent = function(msg) {
     console.log('MEDIA_event for unknown member: ' + msg.member.memberID);
     return;
   }
-  self.delegate.mediaEvent(self, member, msg.event);
+  if (self.delegate.mediaEvent != undefined) {
+    self.delegate.mediaEvent(self, member, msg.event);
+  }
 }
 
 AhoyConference.prototype.handleMediaResponse = function(msg) {
@@ -235,6 +262,70 @@ AhoyConference.prototype.handleMediaReceiveRequest = function(msg) {
   );
 
 }
+
+AhoyConference.prototype.setLocked = function(locked, callback) {
+  var self = this;
+  var transactionID = 'lock-' + Math.random();
+  self.sendMessage(
+    {
+      messageType: "CONFERENCE_LOCK_request",
+      lock: locked,
+      transactionID: transactionID
+    }
+  );
+  if (callback != undefined) {
+    self.transactionCallbacks[transactionID] = callback;
+  }
+}
+
+AhoyConference.prototype.lock = function(callback) {
+  var self = this;
+  self.setLocked(true, callback);
+}
+
+AhoyConference.prototype.unlock = function(callback) {
+  var self = this;
+  self.setLocked(false, callback);
+}
+
+AhoyConference.prototype.handleConferenceLockResponse = function(msg) {
+  var self = this;
+
+  var callback = self.transactionCallbacks[msg.transactionID];
+  if (callback) {
+    delete self.transactionCallbacks[msg.transactionID];
+    callback();
+  }
+}
+
+AhoyConference.prototype.handleConferenceLockIndication = function(msg) {
+  var self = this;
+
+  if (msg.locked) {
+    if (self.delegate.conferenceDidGetLocked != undefined) {
+      self.delegate.conferenceDidGetLocked(self);
+    }
+  } else {
+    if (self.delegate.conferenceDidGetUnlocked != undefined) {
+      self.delegate.conferenceDidGetUnlocked(self);
+    }
+  }
+}
+
+AhoyConference.prototype.handleConferenceKickResponse = function(msg) {
+  var self = this;
+
+  var callback = self.transactionCallbacks[msg.transactionID];
+  if (callback) {
+    delete self.transactionCallbacks[msg.transactionID];
+    if (msg.status == 200) {
+      callback();
+    } else {
+      callback({ errorCode: msg.status, errorText: msg.reason });
+    }
+  }
+}
+
 AhoyConference.prototype.handleConferenceEnded = function(kicked) {
   var self = this;
   var memberIDs = Object.keys(self.members);
@@ -263,7 +354,9 @@ AhoyConference.prototype.handleChatMessageIndication = function(msg) {
     console.log('CHAT_MESSAGE_indication for unknown member: ' + msg.from.memberID);
     return;
   }
-  self.delegate.memberDidSendChatMessage(self, member, msg.message);
+  if (self.delegate.memberDidSendChatMessage != undefined) {
+    self.delegate.memberDidSendChatMessage(self, member, msg.message);
+  }
 }
 
 AhoyConference.prototype.sendChatMessage = function(text, callback) {
@@ -320,8 +413,14 @@ AhoyConference.prototype.leave = function() {
   self.handleConferenceEnded(false);
 }
 
-AhoyConference.prototype.connect = function(wsUrl) {
+AhoyConference.prototype.connect = function(wsUrl, callback) {
   var self = this;
+
+  if (self.ws) {
+    self.ws.onclose = null;
+    self.ws.onerror = null;
+    self.ws.close();
+  }
   self.ws = new WebSocket(wsUrl, 'conference-protocol');
 
   self.ws.onmessage = function(message) {
@@ -331,6 +430,9 @@ AhoyConference.prototype.connect = function(wsUrl) {
       self.delegate.error(self, error, false);
     }
     switch (msg.messageType) {
+      case 'CONFERENCE_CREATE_response':
+        self.handleConferenceCreateResponse(msg);
+        break;
 
       case 'CONFERENCE_JOIN_response':
         self.handleConferenceJoinResponse(msg);
@@ -359,8 +461,20 @@ AhoyConference.prototype.connect = function(wsUrl) {
         self.handleConferenceLeaveIndication(msg);
         break;
 
+      case 'CONFERENCE_KICK_response':
+        self.handleConferenceKickResponse(msg);
+        break;
+
       case 'CONFERENCE_KICK_indication':
         self.handleConferenceEnded(true);
+        break;
+
+      case 'CONFERENCE_LOCK_indication':
+        self.handleConferenceLockIndication(msg);
+        break;
+
+      case 'CONFERENCE_LOCK_response':
+        self.handleConferenceLockResponse(msg);
         break;
 
       case 'MEDIA_indication':
@@ -388,6 +502,12 @@ AhoyConference.prototype.connect = function(wsUrl) {
         invitation: self.invitation,
         name: self.name
       };
+    } else if (self.createConferenceOptions) {
+      var msg = self.createConferenceOptions;
+      msg.transactionID = 'id-' + Math.random();
+      msg.messageType = 'CONFERENCE_CREATE_request';
+      self.createConferenceOptions = null;
+      self.transactionCallbacks[msg.transactionID] = callback;
     } else {
       var msg = {
         messageType: "CONFERENCE_JOIN_request",
@@ -419,10 +539,37 @@ AhoyConference.prototype.joinWithInvitation = function(token) {
   }
 }
 
-AhoyConference.prototype.join = function(wsUrl, conferenceID, name, password) {
+AhoyConference.prototype.join = function(name, wsUrl, conferenceID, password) {
   var self = this;
-  self.conferenceID = conferenceID;
-  self.name = name;
-  self.password = password;
-  self.connect(wsUrl);
+  if (conferenceID != undefined) {
+    self.conferenceID = conferenceID;
+  }
+  if (name != undefined) {
+    self.name = name;
+  }
+  if (password != undefined) {
+    self.password = password;
+  }
+  if (wsUrl != undefined) {
+    self.wsUrl = wsUrl;
+  }
+  self.connect(self.wsUrl);
+}
+
+AhoyConference.prototype.create = function(wsUrl, conferenceName, listenerPassword, speakerPassword, moderatorPassword, callback) {
+  var self = this;
+  if (moderatorPassword == undefined) {
+    moderatorPassword = 'pw' +  Math.random() + Date.now();
+  }
+  self.createConferenceOptions = {
+    conferenceID: conferenceName,
+    conferenceName: conferenceName,
+    listenerPassword: listenerPassword,
+    password: speakerPassword,
+    moderatorPassword: moderatorPassword
+  }
+  self.conferenceID = conferenceName;
+  self.password = moderatorPassword;
+  self.wsUrl = wsUrl;
+  self.connect(wsUrl, callback);
 }

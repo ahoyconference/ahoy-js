@@ -129,6 +129,14 @@
           }
         },
 
+        conferenceDidGetLocked: function(conference) {
+          console.log('conference did get locked by a moderator');
+        },
+
+        conferenceDidGetUnlocked: function(conference) {
+          console.log('conference did get unlocked by a moderator');
+        },
+
         error: function(conference, error, fatal) {
           if (fatal) {
             console.log('a fatal error occured, leaving the conference...');
@@ -150,7 +158,13 @@
       }
 
       var conference = new AhoyConference(delegate);
-      conference.join(wsUrl, 'my conference ID', 'my name');
+      conference.create(wsUrl, 'my conference', null, 'sp34k3r', 'm0d3r4t0r', function(error, conference) {
+        if (error) {
+          console.log(error);
+        } else {
+          conference.join('my name');
+        }
+      });
 
     </script>
   </body>
