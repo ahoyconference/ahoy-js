@@ -32,10 +32,13 @@
       var delegate = {
         didJoinConference: function(error, conference) {
           if (error) {
-            console.log('error joining conference ' + conference.conferenceID);
+            console.log('error joining conference');
             console.log(error);
           } else {
             console.log('joined conference ' + conference.conferenceName);
+            conference.sendChatMessage({ chat: "hi there!" }, function () {
+              console.log('message has been sent');
+            })
             // request user media
             if (conference.isSpeaker) {
               getUserMedia(
@@ -49,12 +52,7 @@
                   conference.publishMedia(
                     true,
                     true,
-                    500,
-                    function(error) {
-                      if (error) {
-                        console.log(error);
-                      }
-                    }
+                    500
                   );
                 },
                 function getUserMediaError(error) {
@@ -85,50 +83,74 @@
           delete members[member.memberID];
         },
 
-        memberDidStartSharingMedia: function(conference, member) {
+        memberDidStartSharingMedia: function(conference, member, stream) {
           console.log('member ' + member.name + ' did start sharing media');
 
-          member.requestMedia(true, true, function(error, stream) {
-            if (error) {
-              console.log('error requesting media for member: ' + member.memberID);
-            } else {
-              var html_str = '<video height="160" id="video-'+member.memberID+'" autoplay />';
-              videoDiv.appendChild(createElement(html_str));
-              var video = document.getElementById('video-' + member.memberID);
-              if (video) {
-                attachMediaStream(video, stream);
-              }
-              console.log('got media for member: ' + member.memberID);
-              console.log(stream);
-            }
-          });
+          var html_str = '<video height="160" id="video-'+member.memberID+'" autoplay />';
+          videoDiv.appendChild(createElement(html_str));
+          var video = document.getElementById('video-' + member.memberID);
+          if (video) {
+            attachMediaStream(video, stream);
+          }
+          console.log('got media for member: ' + member.memberID);
         },
 
         memberDidStopSharingMedia: function(conference, member) {
           console.log('member ' + member.name + ' did stop sharing media');
           var video = document.getElementById('video-' + member.memberID);
           if (video) {
-            video.src = "";
+            video.src = '';
             videoDiv.removeChild(video);
           }
 
         },
-        mediaEvent: function(conference, member, event) {
 
+        memberDidSendChatMessage: function(conference, member,message) {
+          console.log('member ' + member.name + ' did send chat message: ' + JSON.stringify(message));
+        },
+
+        mediaEvent: function(conference, member, event) {
+          switch (event) {
+            case 'start_speaking':
+              console.log('member ' + member.name + ' started speaking');
+              break;
+
+            case 'stop_speaking':
+              console.log('member ' + member.name + ' stopped speaking');
+              break;
+
+            case 'audio_muted':
+              console.log('member ' + member.name + ' muted the microphone');
+              break;
+
+            case 'audio_unmuted':
+              console.log('member ' + member.name + ' unmuted the microphone');
+              break;
+          }
+        },
+
+        error: function(conference, error, fatal) {
+          if (fatal) {
+            console.log('a fatal error occured, leaving the conference...');
+            console.log(error);
+            conference.leave();
+          } else {
+            console.log(error);
+          }
         }
       };
 
-      if (document.location.href.indexOf("ttp://") > 0) {
-        var wsUrl = "ws://"+document.location.href.substring(7, document.location.href.indexOf("/", 7));
-      } else if (document.location.href.indexOf("ttps://") > 0) {
-        var wsUrl = "wss://"+document.location.href.substring(8, document.location.href.indexOf("/", 8));
+      if (document.location.href.toLowerCase().indexOf('http://') != -1) {
+        var wsUrl = 'ws://' + document.location.href.substring('http://'.length, document.location.href.indexOf('/', 'http://'.length));
+      } else if (document.location.href.toLowerCase().indexOf('https://') != -1) {
+        var wsUrl = 'wss://' + document.location.href.substring('https://'.length, document.location.href.indexOf('/', 'https://'.length));
       }
       if (AHOY_CONFIG && AHOY_CONFIG.wsUrl) {
         wsUrl = AHOY_CONFIG.wsUrl;
       }
 
-      var conference = new AhoyConference(wsUrl, "my conference ID", "my name", "", delegate);
-      conference.join();
+      var conference = new AhoyConference(delegate);
+      conference.join(wsUrl, 'my conference ID', 'my name');
 
     </script>
   </body>

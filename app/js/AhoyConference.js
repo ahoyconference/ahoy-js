@@ -1,109 +1,25 @@
-function AhoyConferenceMember(conference, member) {
-  try {
-    this.conference = conference;
-    this.memberID = member.memberID;
-    this.name = member.name;
-    this.isModerator = member.moderator;
-    this.isSpeaker = member.isSpeaker;
-    this.isAudioAvailable = member.audio.available;
-    this.isVideoAvailable = member.video.available;
-    this.pc = null;
-  } catch (error) {
-    console.log(error);
-  }
-}
-
-AhoyConferenceMember.prototype.requestMedia = function(audio, video, callback) {
-  var self = this;
-  var conference = self.conference;
-  if (self.isAudioAvailable || self.isVideoAvailable) {
-    console.log('requesting media for member: ' + self.name);
-    conference.mediaCallbacks[self.memberID] = callback;
-    conference.sendMessage(
-      {
-        messageType: "MEDIA_request",
-        members: [
-            {
-              memberID: self.memberID,
-              audio: (audio & self.isAudioAvailable),
-              video: (video & self.isVideoAvailable),
-            }
-        ],
-        transactionID: self.memberID
-      }
-    );
-  } else {
-    callback({ errorCode: 404, errorText: "no media available"});
-  }
-}
-
-
-AhoyConferenceMember.prototype.createSdpResponse = function(sessionOffer, callback) {
-  var self = this;
-  var conference = self.conference;
-  self.pc = conference.createPeerConnection();
-
-  if (!self.pc) {
-    console.log('unable to create peerconnection');
-    callback({ errorCode: 500, errorText: 'unable to create peerconnection'});
-    return;
-  }
-
-  var remoteDescription = new RTCSessionDescription( { type: "offer", sdp: unescape(sessionOffer.sdp) } );
-  self.pc.onaddstream = function(event) {
-    callback(null, event.stream);
-  };
-  self.pc.setRemoteDescription(
-    remoteDescription,
-    function setRemoteSuccess() {
-      self.pc.createAnswer(
-        function createAnswerSuccess(description) {
-          conference.sendMessage(
-            {
-              messageType: "SDP_response",
-              sdp: escape(description.sdp),
-              transactionID: sessionOffer.transactionID
-            }
-          );
-          self.pc.setLocalDescription(
-            description,
-            function setLocalSuccess() {
-            },
-            function setLocalError(error) {
-              console.log(error);
-              callback(error);
-            }
-          )
-        },
-        function createAnswerError(error) {
-          console.log(error);
-          callback(error);
-        }
-      );
-    },
-    function error(error) {
-      console.log(error);
-      callback(error);
-    }
-  );
-}
-
-function AhoyConference(wsUrl, conferenceID, name, password, delegate) {
-  this.wsUrl = wsUrl;
-  this.connectWsUrl = wsUrl;
-  this.conferenceID = conferenceID;
-  this.name = name;
-  this.password = password;
-  this.ws = null;
+function AhoyConference(delegate, options) {
   this.delegate = delegate;
+  this.ws = null;
   this.conferenceName = null;
   this.description = null;
-  this.members = {};
-  this.mediaCallbacks = {};
-  this.localStream = null;
-  this.pc = null;
   this.isSpeaker = false;
   this.isModerator = false;
+  this.localStream = null;
+  this.pc = null;
+  this.memberID = null;
+  this.members = {};
+  this.transactionCallbacks = {};
+  this.receiveAudio = true;
+  this.receiveVideo = true;
+  if (options != undefined) {
+    if (options.receiveAudio != undefined) {
+      this.receiveAudio = options.receiveAudio;
+    }
+    if (options.receiveVideo != undefined) {
+      this.receiveVideo = options.receiveVideo;
+    }
+  }
 }
 
 AhoyConference.prototype.createPeerConnection = function(turn) {
@@ -124,7 +40,7 @@ AhoyConference.prototype.createPeerConnection = function(turn) {
     }
     pc = new RTCPeerConnection(pc_config);
   } catch (error) {
-    console.log(error);
+    self.delegate.error(self, error, true);
   }
   return pc
 }
@@ -141,13 +57,14 @@ AhoyConference.prototype.sendMessage = function(msg) {
 
 AhoyConference.prototype.handleConferenceJoinResponse = function(msg) {
   var self = this;
-  console.log(msg);
+
   switch (msg.status) {
     case 200:
       self.conferenceName = msg.conferenceName;
       self.description = msg.description;
       self.isSpeaker = msg.speaker;
       self.isModerator = msg.moderator;
+      self.memberID = msg.memberID;
       msg.members.forEach(function(member) {
         var ahoyConferenceMember = new AhoyConferenceMember(self, member);
         self.members[ahoyConferenceMember.memberID] = ahoyConferenceMember;
@@ -158,13 +75,23 @@ AhoyConference.prototype.handleConferenceJoinResponse = function(msg) {
         var ahoyConferenceMember = self.members[memberID];
         self.delegate.memberDidJoinConference(self, ahoyConferenceMember);
         if (ahoyConferenceMember.isAudioAvailable || ahoyConferenceMember.isVideoAvailable) {
-          self.delegate.memberDidStartSharingMedia(self, ahoyConferenceMember);
+          ahoyConferenceMember.requestMedia(self.receiveAudio, self.receiveVideo, function(error, stream) {
+            if (error) {
+              self.delegate.error(self, error, false);
+            } else {
+              self.delegate.memberDidStartSharingMedia(self, ahoyConferenceMember, stream);
+            }
+          });
         }
       });
       break;
 
+    case 302:
+      self.connect(msg.url);
+      break;
+
     default:
-      console.log(msg.status);
+      console.log(msg);
       self.delegate.didJoinConference({ errorCode: status, errorText: msg.reason});
   }
 }
@@ -208,7 +135,14 @@ AhoyConference.prototype.handleMediaIndication = function(msg) {
     if (wasSharingMedia) {
       self.delegate.memberDidStopSharingMedia(self, member);
     }
-    self.delegate.memberDidStartSharingMedia(self, member);
+    member.requestMedia(self.receiveAudio, self.receiveVideo, function(error, stream) {
+      if (error) {
+        self.delegate.error(self, error, false);
+      } else {
+        self.delegate.memberDidStartSharingMedia(self, member, stream);
+      }
+    });
+
   } else {
     if (wasSharingMedia) {
       self.delegate.memberDidStopSharingMedia(self, member);
@@ -216,6 +150,19 @@ AhoyConference.prototype.handleMediaIndication = function(msg) {
   }
 }
 
+AhoyConference.prototype.handleMediaEvent = function(msg) {
+  var self = this;
+  // ignore events for ourself
+  if (self.memberID == msg.member.memberID) return;
+
+  var member = self.members[msg.member.memberID];
+
+  if (!member) {
+    console.log('MEDIA_event for unknown member: ' + msg.member.memberID);
+    return;
+  }
+  self.delegate.mediaEvent(self, member, msg.event);
+}
 
 AhoyConference.prototype.handleMediaResponse = function(msg) {
   var self = this;
@@ -224,10 +171,6 @@ AhoyConference.prototype.handleMediaResponse = function(msg) {
   if (!member) {
     console.log('MEDIA_response for unknown member: ' + msg.transactionID);
     return;
-  }
-  var callback = self.mediaCallbacks[msg.transactionID];
-  if (!callback) {
-    console.log('MEDIA_response for unknown transactionID: ' + msg.transactionID);
   }
 }
 
@@ -239,11 +182,13 @@ AhoyConference.prototype.handleSdpRequest = function(msg) {
     console.log('SDP_request for unknown member: ' + msg.member.memberID);
     return;
   }
-  var callback = self.mediaCallbacks[msg.member.memberID];
+  var callback = self.transactionCallbacks[msg.member.memberID];
   if (!callback) {
     console.log('SDP_request for unknown transactionID: ' + msg.member.memberID);
+  } else {
+    delete self.transactionCallbacks[msg.member.memberID];
+    member.createSdpResponse(msg, callback);
   }
-  member.createSdpResponse(msg, callback);
 }
 
 AhoyConference.prototype.handleMediaReceiveRequest = function(msg) {
@@ -275,17 +220,17 @@ AhoyConference.prototype.handleMediaReceiveRequest = function(msg) {
             function setLocalSuccess() {
             },
             function setLocalError(error) {
-              console.log(error);
+              self.delegate.error(self, error, true);
             }
           )
         },
         function createAnswerError(error) {
-          console.log(error);
+          self.delegate.error(self, error, true);
         }
       );
     },
     function error(error) {
-      console.log(error);
+      self.delegate.error(self, error, true);
     }
   );
 
@@ -310,7 +255,48 @@ AhoyConference.prototype.handleConferenceEnded = function(kicked) {
   self.delegate.didLeaveConference(self, kicked);
 }
 
-AhoyConference.prototype.publishMedia = function(audio, video, videoBitrate, callback) {
+AhoyConference.prototype.handleChatMessageIndication = function(msg) {
+  var self = this;
+  var member = self.members[msg.from.memberID];
+
+  if (!member) {
+    console.log('CHAT_MESSAGE_indication for unknown member: ' + msg.from.memberID);
+    return;
+  }
+  self.delegate.memberDidSendChatMessage(self, member, msg.message);
+}
+
+AhoyConference.prototype.sendChatMessage = function(text, callback) {
+  var self = this;
+  var transactionID = 'chat-' + Math.random();
+  if (text instanceof String === false) {
+    text = JSON.stringify(text);
+  }
+  self.sendMessage(
+    {
+      messageType: "CHAT_MESSAGE_request",
+      message: {
+        text: text
+      },
+      transactionID: transactionID
+    }
+  );
+  if (callback != undefined) {
+    self.transactionCallbacks[transactionID] = callback;
+  }
+}
+
+AhoyConference.prototype.handleChatMessageResponse = function(msg) {
+  var self = this;
+
+  var callback = self.transactionCallbacks[msg.transactionID];
+  if (callback) {
+    delete self.transactionCallbacks[msg.transactionID];
+    callback();
+  }
+}
+
+AhoyConference.prototype.publishMedia = function(audio, video, videoBitrate) {
   var self = this;
   self.sendMessage(
     {
@@ -331,17 +317,18 @@ AhoyConference.prototype.leave = function() {
     self.ws.close();
     self.ws = nulll;
   }
+  self.handleConferenceEnded(false);
 }
 
-AhoyConference.prototype.join = function() {
+AhoyConference.prototype.connect = function(wsUrl) {
   var self = this;
-  self.ws = new WebSocket(self.connectWsUrl, 'conference-protocol');
+  self.ws = new WebSocket(wsUrl, 'conference-protocol');
 
   self.ws.onmessage = function(message) {
     try {
       var msg = JSON.parse(message.data);
     } catch (error) {
-        console.log(error);
+      self.delegate.error(self, error, false);
     }
     switch (msg.messageType) {
 
@@ -380,22 +367,62 @@ AhoyConference.prototype.join = function() {
         self.handleMediaIndication(msg);
         break;
 
+      case 'MEDIA_event':
+        self.handleMediaEvent(msg);
+        break;
+
+      case 'CHAT_MESSAGE_indication':
+        self.handleChatMessageIndication(msg);
+        break;
+
+      case 'CHAT_MESSAGE_response':
+        self.handleChatMessageResponse(msg);
+        break;
     }
   }
 
   self.ws.onopen = function() {
-    self.sendMessage(
-      {
+    if (self.invitation != undefined) {
+      var msg = {
+        messageType: "CONFERENCE_JOIN_request",
+        invitation: self.invitation,
+        name: self.name
+      };
+    } else {
+      var msg = {
         messageType: "CONFERENCE_JOIN_request",
         conferenceID: self.conferenceID,
         name: self.name,
         password: self.password
-      }
-    );
+      };
+    }
+    self.sendMessage(msg);
   }
 
   self.ws.onclose = function() {
     self.handleConferenceEnded(false);
   }
+}
 
+AhoyConference.prototype.joinWithInvitation = function(token) {
+  var self = this;
+  try {
+      var data = atob(token);
+      if (data != null) {
+          link = JSON.parse(data);
+          console.log(link);
+          self.invitation = link.invitation;
+          self.connect(link.wsUrl);
+      }
+  } catch (error) {
+    self.delegate.error(self, error, true);
+  }
+}
+
+AhoyConference.prototype.join = function(wsUrl, conferenceID, name, password) {
+  var self = this;
+  self.conferenceID = conferenceID;
+  self.name = name;
+  self.password = password;
+  self.connect(wsUrl);
 }
