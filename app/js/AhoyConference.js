@@ -408,7 +408,7 @@ AhoyConference.prototype.leave = function() {
     self.ws.onclose = null;
     self.ws.onerror = null;
     self.ws.close();
-    self.ws = nulll;
+    self.ws = null;
   }
   self.handleConferenceEnded(false);
 }
