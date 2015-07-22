@@ -1,0 +1,180 @@
+<html>
+  <head>
+    <meta charset="utf-8">
+    <meta http-equiv="X-UA-Compatible" content="IE=edge">
+    <title>Ahoy! Conference vanilla JS demo client</title>
+    <meta name="description" content="">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+  </head>
+  <body>
+    <div id="videoDiv"></div>
+    <script src="js/app.js"></script>
+    <script src="config.js"></script>
+    <script language="JavaScript">
+      var videoDiv= document.getElementById("videoDiv");
+      var currentSpeaker = null;
+      var members = {};
+
+      function createElement(htmlStr) {
+        var frag = document.createDocumentFragment(),
+        temp = document.createElement('div');
+        temp.innerHTML = htmlStr;
+        while (temp.firstChild) {
+          frag.appendChild(temp.firstChild);
+        }
+        return frag;
+      }
+
+      function electSpeaker(speaker) {
+        if (speaker != undefined) {
+          if (currentSpeaker == speaker) {
+            return;
+          }
+          currentSpeaker = speaker;
+        } else {
+          currentSpeaker = null;
+        }
+
+        var memberIDs = Object.keys(members);
+
+        // try to find a member with an active audio stream
+        memberIDs.forEach(function(memberID) {
+          if (currentSpeaker) return;
+          var member = members[memberID];
+
+          if (member.isAudioAvailable && member.isSpeaking) {
+            currentSpeaker = member;
+          }
+        });
+
+        // try to find a member with an audio stream
+        memberIDs.forEach(function(memberID) {
+          if (currentSpeaker) return;
+          var member = members[memberID];
+
+          if (member.isAudioAvailable) {
+            currentSpeaker = member;
+          }
+        });
+
+        // settle for any member with a video stream
+        memberIDs.forEach(function(memberID) {
+          if (currentSpeaker) return;
+          var member = members[memberID];
+
+          if (member.isVideoAvailable) {
+            currentSpeaker = member;
+          }
+        });
+
+        var bigScreenDiv = document.getElementById('bigScreenDiv');
+        if (bigScreenDiv) {
+          // remove the old video
+          videoDiv.removeChild(bigScreenDiv);
+        }
+
+        if (currentSpeaker) {
+          console.log('elected speaker ' + currentSpeaker.name);
+          // the temasys webrtc plugin will replace the video element that's why we wrap it into a div
+          var html_str = '<div id="bigScreenDiv"><video height="100%" id="bigScreen" autoplay /></div>';
+          videoDiv.appendChild(createElement(html_str));
+          var video = document.getElementById('bigScreen');
+          if (video) {
+            attachMediaStream(video, currentSpeaker.stream);
+          }
+        } else {
+          console.log('unable to elect speaker');
+        }
+      }
+
+      var delegate = {
+        didJoinConference: function(error, conference) {
+          if (error) {
+            console.log('error joining conference');
+            console.log(error);
+          } else {
+            console.log('joined conference ' + conference.conferenceName);
+          }
+        },
+
+        didLeaveConference: function(conference, didGetKicked) {
+          console.log('didLeaveConference ' + conference.conferenceName);
+        },
+
+        memberDidJoinConference: function(conference, member) {
+          members[member.memberID] = member;
+          console.log('member ' + member.name + ' did join conference ' + conference.conferenceName);
+        },
+
+        memberDidLeaveConference: function(conference, member) {
+          console.log('member ' + member.name + ' did leave conference ' + conference.conferenceName);
+          delete members[member.memberID];
+          if (currentSpeaker == member) {
+            electSpeaker();
+          }
+        },
+
+        memberDidStartSharingMedia: function(conference, member, stream) {
+          console.log('member ' + member.name + ' did start sharing media');
+          if (!currentSpeaker) {
+            electSpeaker();
+          }
+        },
+
+        memberDidStopSharingMedia: function(conference, member) {
+          console.log('member ' + member.name + ' did stop sharing media');
+          if (currentSpeaker == member) {
+            electSpeaker();
+          }
+        },
+
+
+        mediaEvent: function(conference, member, event) {
+          switch (event) {
+            case 'start_speaking':
+              console.log('member ' + member.name + ' started speaking');
+              if (currentSpeaker != member) {
+                electSpeaker(member);
+              }
+              break;
+
+            case 'stop_speaking':
+              console.log('member ' + member.name + ' stopped speaking');
+              break;
+
+            case 'audio_muted':
+              console.log('member ' + member.name + ' muted the microphone');
+              break;
+
+            case 'audio_unmuted':
+              console.log('member ' + member.name + ' unmuted the microphone');
+              break;
+          }
+        },
+
+        error: function(conference, error, fatal) {
+          if (fatal) {
+            console.log('a fatal error occured, leaving the conference...');
+            console.log(error);
+            conference.leave();
+          } else {
+            console.log(error);
+          }
+        }
+      };
+
+      if (document.location.href.toLowerCase().indexOf('http://') != -1) {
+        var wsUrl = 'ws://' + document.location.href.substring('http://'.length, document.location.href.indexOf('/', 'http://'.length));
+      } else if (document.location.href.toLowerCase().indexOf('https://') != -1) {
+        var wsUrl = 'wss://' + document.location.href.substring('https://'.length, document.location.href.indexOf('/', 'https://'.length));
+      }
+      if (AHOY_CONFIG && AHOY_CONFIG.wsUrl) {
+        wsUrl = AHOY_CONFIG.wsUrl;
+      }
+
+      var conference = new AhoyConference(delegate);
+      conference.join('viewer', wsUrl, 'my conference');
+
+    </script>
+  </body>
+</html>

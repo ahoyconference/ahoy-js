@@ -186,6 +186,19 @@ AhoyConference.prototype.handleMediaEvent = function(msg) {
     console.log('MEDIA_event for unknown member: ' + msg.member.memberID);
     return;
   }
+  switch (msg.event) {
+    case "start_speaking":
+      member.isSpeaking = true;
+      break;
+
+    case "stop_speaking":
+      member.isSpeaking = false;
+      break;
+
+    case "audio_mute":
+      member.isSpeaking = false;
+      break;
+  }
   if (self.delegate.mediaEvent != undefined) {
     self.delegate.mediaEvent(self, member, msg.event);
   }
@@ -337,6 +350,7 @@ AhoyConference.prototype.handleConferenceEnded = function(kicked) {
       member.pc.close();
       member.pc = null;
     }
+    member.stream = null;
     delete self.members[memberID];
   });
   if (self.pc) {
